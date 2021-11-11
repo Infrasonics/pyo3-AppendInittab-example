@@ -1,8 +1,8 @@
 import emb
 
-print(emb.numargs())
 
 def multiply(a,b):
+    print("Num args from embedded: ", emb.numargs())
     print("Will compute", a, "times", b)
     c = 0
     for i in range(0, a):

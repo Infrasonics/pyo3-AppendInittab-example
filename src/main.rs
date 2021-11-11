@@ -5,71 +5,38 @@ use pyo3::{
     types::{PyList, PyTuple},
     FromPyPointer,
 };
-use std::{borrow::BorrowMut, cell::RefCell, env::args};
+use std::{cell::RefCell, env::args};
 
 thread_local!(static EMB_GLOBAL_DATA: RefCell<usize>  = RefCell::new(0));
 
-extern "C" fn emb_numargs(_s: *mut ffi::PyObject, _args: *mut ffi::PyObject) -> *mut ffi::PyObject {
-    Python::with_gil(|py| {
-        EMB_GLOBAL_DATA.with(|nargs| {
-            *nargs.borrow()
-        }).into_py(py).into_ptr()
-    })
+#[pymodule]
+fn emb(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(numargs, m)?)?;
+    Ok(())
 }
 
-extern "C" fn init_emb() -> *mut ffi::PyObject {
-    unsafe {
-        let fptr: ffi::PyCFunction = emb_numargs;
-        let method_numargs = ffi::PyMethodDef {
-            ml_name: "numargs\0".as_ptr() as *const _,
-            ml_meth: Some(fptr),
-            ml_flags: ffi::METH_VARARGS,
-            ml_doc: "Return the number of arguments received by the process\0".as_ptr() as *const _,
-        };
-
-        let method_sentinel = ffi::PyMethodDef {
-            ml_name: std::ptr::null_mut(),
-            ml_meth: None,
-            ml_flags: 0,
-            ml_doc: std::ptr::null_mut(),
-        };
-
-        let mut methods_array: [ffi::PyMethodDef; 2] = [method_numargs, method_sentinel];
-        let methods: *mut ffi::PyMethodDef = methods_array.as_mut_ptr();
-
-        let slot_sentinel = ffi::PyModuleDef_Slot {
-            slot: 0,
-            value: std::ptr::null_mut(),
-        };
-
-        let mut slots_array: [ffi::PyModuleDef_Slot; 1] = [slot_sentinel];
-        let slots: *mut ffi::PyModuleDef_Slot = slots_array.as_mut_ptr();
-
-        let def: *mut ffi::PyModuleDef = ffi::PyModuleDef {
-            m_base: ffi::PyModuleDef_HEAD_INIT,
-            m_name: "emb\0".as_ptr() as *const _,
-            m_doc: std::ptr::null(),
-            m_size: 0,
-            m_methods: methods,
-            //XXX weird, since the exact same statement seems to work in derive_utils.rs:304
-            m_slots: std::ptr::null_mut(),
-            // m_slots: slots,
-            m_traverse: None,
-            m_clear: None,
-            m_free: None,
-        }.borrow_mut();
-
-        ffi::PyModule_Create(def)
-    }
+#[pyfunction]
+/// Return the number of arguments of the application command line
+fn numargs() -> PyResult<usize> {
+    EMB_GLOBAL_DATA.with(|nargs| {
+        Ok(*nargs.borrow())
+    })
 }
 
 
 fn main() -> Result<()> {
+    // Initialize the numargs variable
     EMB_GLOBAL_DATA.with(|nargs| {
         *nargs.borrow_mut() = args().len();
     });
 
-    unsafe { ffi::PyImport_AppendInittab("emb\0".as_ptr() as *const _, Some(init_emb)); }
+    unsafe {
+        // Make the emb.numargs() function accessible to the embedded Python interpreter.
+        // This makes use of the fact that #[pymodule] creates an initialization function with the
+        // name `PyInit_<funcname>`.
+        let ptr = std::mem::transmute::<*const (), extern "C" fn() -> *mut ffi::PyObject>(PyInit_emb as *const ());
+        ffi::PyImport_AppendInittab("emb\0".as_ptr() as *const _, Some(ptr));
+    }
     pyo3::prepare_freethreaded_python();
 
     let mut argiter = args();
